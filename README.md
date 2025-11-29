@@ -193,6 +193,8 @@ python LineTracerPrototype.py graph1.jpg -o result.csv --x-scale log --y-scale l
 3. Y軸の最小値（下端）
 4. Y軸の最大値（上端）
 
+![ステップ1: 軸のキャリブレーション](step1.jpg)
+
 クリック後、コンソールで各点の実際の数値を入力します:
 
 ```
@@ -211,6 +213,8 @@ python LineTracerPrototype.py graph1.jpg -o result.csv --x-scale log --y-scale l
 
 処理された画像が表示されます。抽出したい曲線の上を1回クリックしてください。
 
+![ステップ2: 曲線の選択](step2.jpg)
+
 - クリックすると自動的にウィンドウが閉じます
 - コンソールに抽出状況が表示されます
 - 抽出されたピクセル数や連結成分の数が確認できます
@@ -218,6 +222,8 @@ python LineTracerPrototype.py graph1.jpg -o result.csv --x-scale log --y-scale l
 #### ステップ 3: 結果の確認
 
 抽出された曲線が赤色で表示されます。
+
+![ステップ3: 結果の確認](step3.jpg)
 
 - 画像を確認したら、×ボタンでウィンドウを閉じてください
 - 自動的にCSVファイルが生成されます
