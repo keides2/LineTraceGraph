@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import math
+import argparse
 
 
 class GraphDigitizer:
@@ -149,7 +150,22 @@ class GraphDigitizer:
         ratio = (p_val - p1) / (p2 - p1)
         return ratio * (v2 - v1) + v1
 
-    def export_csv(self, filename="output.csv", smooth_window=0):
+    def export_csv(self, filename="output.csv", smooth_window=0,
+                   x_is_log=True, y_is_log=True):
+        """
+        抽出したデータをCSVファイルに出力する
+
+        Parameters
+        ----------
+        filename : str
+            出力ファイル名（デフォルト: output.csv）
+        smooth_window : int
+            移動平均のウィンドウサイズ（0で無効、デフォルト: 0）
+        x_is_log : bool
+            X軸が対数スケールかどうか（デフォルト: True）
+        y_is_log : bool
+            Y軸が対数スケールかどうか（デフォルト: True）
+        """
         if not self.extracted_pixels:
             print("データがありません。")
             return
@@ -157,19 +173,19 @@ class GraphDigitizer:
         x_pix_max = self.calibration_points[1][0]
         y_pix_min = self.calibration_points[2][1]
         y_pix_max = self.calibration_points[3][1]
-        
+
         # X座標ごとにY座標をグループ化して中央値を取る（精度向上）
         from collections import defaultdict
         x_to_ys = defaultdict(list)
         for px, py in self.extracted_pixels:
             x_to_ys[px].append(py)
-        
+
         # 各X座標の代表Y値（中央値）を計算
         unique_points = []
         for px in sorted(x_to_ys.keys()):
             py_median = np.median(x_to_ys[px])
             unique_points.append((px, py_median))
-        
+
         # オプション: 移動平均でスムージング
         if smooth_window > 0 and len(unique_points) > smooth_window:
             from scipy.ndimage import uniform_filter1d
@@ -179,7 +195,7 @@ class GraphDigitizer:
                 ys, size=smooth_window, mode='nearest'
             )
             unique_points = list(zip(xs, ys_smooth))
-        
+
         # ピクセル座標を物理値に変換
         data = []
         for px, py in unique_points:
@@ -190,7 +206,7 @@ class GraphDigitizer:
                     self.calibration_values["x_min"],
                     self.calibration_values["x_max"],
                 ],
-                is_log=True,
+                is_log=x_is_log,
             )
             time_val = self.convert_pixel_to_value(
                 py,
@@ -199,23 +215,73 @@ class GraphDigitizer:
                     self.calibration_values["y_min"],
                     self.calibration_values["y_max"],
                 ],
-                is_log=True,
+                is_log=y_is_log,
             )
             data.append([current_val, time_val])
-        
+
         df = pd.DataFrame(data, columns=["Current(A)", "Time(s)"])
         df.to_csv(filename, index=False, lineterminator='\n')
+
+        # スケール情報を表示
+        x_scale_str = "log" if x_is_log else "linear"
+        y_scale_str = "log" if y_is_log else "linear"
         print(f"CSVファイルを出力しました: {filename}")
+        print(f"スケール: X軸={x_scale_str}, Y軸={y_scale_str}")
         print(f"データ点数: {len(data)} (重複X削減後)")
         print(f"元のピクセル数: {len(self.extracted_pixels)}")
 
 
+def parse_args():
+    """コマンドライン引数を解析する"""
+    parser = argparse.ArgumentParser(
+        description="対数/線形グラフから曲線データを抽出してCSVファイルに変換するツール"
+    )
+    parser.add_argument(
+        "image",
+        help="入力画像ファイルのパス"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default="graph_data.csv",
+        help="出力CSVファイル名（デフォルト: graph_data.csv）"
+    )
+    parser.add_argument(
+        "--x-scale",
+        choices=["log", "linear"],
+        default="log",
+        help="X軸のスケール（デフォルト: log）"
+    )
+    parser.add_argument(
+        "--y-scale",
+        choices=["log", "linear"],
+        default="log",
+        help="Y軸のスケール（デフォルト: log）"
+    )
+    parser.add_argument(
+        "--smooth",
+        type=int,
+        default=0,
+        help="移動平均のウィンドウサイズ（デフォルト: 0=無効）"
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    img_path = "graph1.jpg"
+    args = parse_args()
+
+    # スケール設定を変換
+    x_is_log = (args.x_scale == "log")
+    y_is_log = (args.y_scale == "log")
+
     try:
-        digitizer = GraphDigitizer(img_path)
+        digitizer = GraphDigitizer(args.image)
         digitizer.calibrate_axis()
         digitizer.select_and_trace_curve()
-        digitizer.export_csv("graph_data.csv")
+        digitizer.export_csv(
+            filename=args.output,
+            smooth_window=args.smooth,
+            x_is_log=x_is_log,
+            y_is_log=y_is_log
+        )
     except Exception as e:
         print(f"エラーが発生しました: {e}")
