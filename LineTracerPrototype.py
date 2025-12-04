@@ -16,6 +16,8 @@ class GraphDigitizer:
         self.display_img = cv2.cvtColor(self.original_img, cv2.COLOR_BGR2RGB)
         # グレースケール変換
         self.gray_img = cv2.cvtColor(self.original_img, cv2.COLOR_BGR2GRAY)
+        # HSV変換（色検出用）
+        self.hsv_img = cv2.cvtColor(self.original_img, cv2.COLOR_BGR2HSV)
         # 変数の初期化
         self.calibration_points = []  # [x_pixel, y_pixel]
         self.calibration_values = []  # [x_val, y_val] (対数ならそのままの値)
@@ -27,6 +29,8 @@ class GraphDigitizer:
         )
         # 線を細くして分離しやすくする処理
         self.thinned_img = self._thin_lines()
+        # 曲線のみ抽出（グリッド線を除去）
+        self.curve_only_img = self._extract_curves_only()
 
     def _thin_lines(self):
         """
@@ -58,6 +62,83 @@ class GraphDigitizer:
             area = stats[i, cv2.CC_STAT_AREA]
             if area >= min_area:
                 filtered[labels == i] = 255
+        return filtered
+
+    def _extract_curves_only(self):
+        """
+        色に基づいてグリッド線（灰色）を除去し、曲線のみを抽出
+        対応: 色付き曲線（緑、青、赤等）および黒い曲線
+        """
+        h, s, v = cv2.split(self.hsv_img)
+
+        # === ステップ1: 彩度の高いピクセル（色付き曲線）を検出 ===
+        saturation_threshold = 40
+        sat_thresh = cv2.threshold(s, saturation_threshold, 255,
+                                   cv2.THRESH_BINARY)[1]
+        val_thresh = cv2.threshold(v, 240, 255, cv2.THRESH_BINARY_INV)[1]
+        colored_mask = cv2.bitwise_and(sat_thresh, val_thresh)
+        colored_pixels = np.count_nonzero(colored_mask)
+
+        # === ステップ2: 黒い線の検出 ===
+        darkness_threshold = 100  # 少し緩めに
+        dark_thresh = cv2.threshold(v, darkness_threshold, 255,
+                                    cv2.THRESH_BINARY_INV)[1]
+
+        # === ステップ3: グリッド線の除去（黒線モード用） ===
+        # 水平線と垂直線を別々に検出
+        # より長い線のみをグリッドとして検出（曲線を保護）
+        h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (60, 1))
+        v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 60))
+
+        h_lines = cv2.morphologyEx(dark_thresh, cv2.MORPH_OPEN, h_kernel)
+        v_lines = cv2.morphologyEx(dark_thresh, cv2.MORPH_OPEN, v_kernel)
+        grid_lines = cv2.bitwise_or(h_lines, v_lines)
+
+        # グリッド線を適度に膨張（曲線を消しすぎないように）
+        grid_dilate = np.ones((3, 3), np.uint8)
+        grid_lines = cv2.dilate(grid_lines, grid_dilate, iterations=1)
+
+        # === ステップ4: 結果の決定 ===
+        if colored_pixels > 50000:
+            result = colored_mask
+            kernel = np.ones((2, 2), np.uint8)
+            result = cv2.dilate(result, kernel, iterations=1)
+            mode_str = f"色検出モード: {colored_pixels} ピクセル検出"
+        else:
+            # 黒い曲線の場合：暗いピクセルからグリッド線を除去
+            result = cv2.bitwise_and(dark_thresh, cv2.bitwise_not(grid_lines))
+
+            # 曲線を少し膨張させて途切れを補完
+            curve_kernel = np.ones((2, 2), np.uint8)
+            result = cv2.dilate(result, curve_kernel, iterations=1)
+
+            mode_str = "黒線検出モード: グリッド除去適用"
+
+        print(mode_str)
+
+        # === ステップ5: ノイズ除去（形状ベース） ===
+        num_labels, labels, stats, centroids = \
+            cv2.connectedComponentsWithStats(result)
+
+        min_area = 20  # 小さな断片も保持
+        filtered = np.zeros_like(result)
+
+        for i in range(1, num_labels):
+            area = stats[i, cv2.CC_STAT_AREA]
+            width = stats[i, cv2.CC_STAT_WIDTH]
+            height = stats[i, cv2.CC_STAT_HEIGHT]
+
+            if area < min_area:
+                continue
+
+            # 非常に細長い水平/垂直線のみ除外（より厳格に）
+            if width > 80 and height < 4:
+                continue
+            if height > 80 and width < 4:
+                continue
+
+            filtered[labels == i] = 255
+
         return filtered
 
     def calibrate_axis(self):
@@ -95,34 +176,74 @@ class GraphDigitizer:
     def select_and_trace_curve(self):
         """
         欲しい線をクリックしてつながっている成分を抽出
+        グリッド線を除去した画像を使用
         """
         print("\n【ステップ2】抽出したい線をクリックしてください。")
-        fig, ax = plt.subplots(figsize=(10, 8))
-        ax.imshow(self.thinned_img, cmap="gray")
-        ax.set_title("Click on the curve you want to extract")
-        print("画像ウィンドウで線をクリックしてください...")
+        print("（グリッド線除去済みの画像を表示しています）")
+
+        # 2つの画像を並べて表示（比較用）
+        fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+        axes[0].imshow(self.thinned_img, cmap="gray")
+        axes[0].set_title("Original (with grid)")
+        axes[1].imshow(self.curve_only_img, cmap="gray")
+        axes[1].set_title("Grid Removed - Click here")
+
+        print("右側の画像（グリッド除去済み）で線をクリックしてください...")
         clicked_point = plt.ginput(n=1, timeout=-1)
         plt.close()
+
         if not clicked_point:
             print("キャンセルされました。")
             return
+
         cx, cy = int(clicked_point[0][0]), int(clicked_point[0][1])
         print(f"クリック位置: ({cx}, {cy})")
+
+        # 右側の画像でクリックされた場合の座標調整
+        img_width = self.curve_only_img.shape[1]
+        if cx > img_width:
+            cx = cx - img_width  # 右側画像の座標に調整
+
         print("連結成分を抽出中...")
+
+        # グリッド除去済み画像で連結成分を検出
         num_labels, labels, stats, centroids = \
-            cv2.connectedComponentsWithStats(
-                self.thinned_img
-            )
+            cv2.connectedComponentsWithStats(self.curve_only_img)
+
         target_label = labels[cy, cx]
         if target_label == 0:
-            print("エラー: 背景をクリックしました。線の真上をクリックしてください。")
-            return
+            # クリック位置の近傍を検索
+            search_radius = 10
+            found = False
+            for r in range(1, search_radius + 1):
+                for dy in range(-r, r + 1):
+                    for dx in range(-r, r + 1):
+                        ny, nx = cy + dy, cx + dx
+                        if (0 <= ny < labels.shape[0] and
+                                0 <= nx < labels.shape[1]):
+                            if labels[ny, nx] != 0:
+                                target_label = labels[ny, nx]
+                                found = True
+                                break
+                    if found:
+                        break
+                if found:
+                    break
+
+            if not found:
+                print("エラー: 近くに線が見つかりません。")
+                print("線の真上をクリックしてください。")
+                return
+
         print(f"ラベル {target_label} を抽出しました。")
         print(f"検出された連結成分の数: {num_labels - 1}")
+
         mask = (labels == target_label).astype(np.uint8) * 255
         ys, xs = np.where(mask > 0)
         print(f"抽出されたピクセル数: {len(xs)}")
+
         self.extracted_pixels = sorted(zip(xs, ys), key=lambda p: p[0])
+
         print("抽出結果を表示します。閉じて続行してください。")
         plt.figure(figsize=(10, 8))
         plt.imshow(self.display_img)
